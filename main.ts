@@ -1,134 +1,152 @@
 import {
 	App,
-	Editor,
-	MarkdownView,
-	Modal,
-	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TFile,
+	WorkspaceLeaf,
+	moment,
+	setIcon,
 } from "obsidian";
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface PlusSettings {
+	ctime: boolean;
+	mtime: boolean;
+	debug: boolean;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: "default",
+const DEFAULT_SETTINGS: PlusSettings = {
+	ctime: true,
+	mtime: true,
+	debug: true,
 };
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class StatusPlus extends Plugin {
+	settings: PlusSettings;
+	elem: HTMLElement;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon(
-			"dice",
-			"Sample Plugin",
-			(evt: MouseEvent) => {
-				// Called when the user clicks the icon.
-				new Notice("This is a notice!");
-			}
-		);
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass("my-plugin-ribbon-class");
+		this.log(`onload`);
 
 		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText("Status Bar Text");
+		this.elem = this.addStatusBarItem();
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: "open-sample-modal-simple",
-			name: "Open sample modal (simple)",
-			callback: () => {
-				new SampleModal(this.app).open();
-			},
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: "sample-editor-command",
-			name: "Sample editor command",
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection("Sample Editor Command");
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: "open-sample-modal-complex",
-			name: "Open sample modal (complex)",
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView =
-					this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		// TODO: this.app.vault.on("create", this.render) doesn't work, figure out why.
+		// TODO: Read https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions
+		// TODO: Read https://www.typescriptlang.org/docs/handbook/2/classes.html#this-at-runtime-in-classes
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+		// Vault events:     create | modify | delete | rename | closed
+		// Workspace events: file-open | active-leaf-change
+
+		this.registerEvent(
+			this.app.vault.on("modify", (f) => {
+				if (f instanceof TFile && f == this.app.workspace.getActiveFile()) {
+					this.render("modify", f);
 				}
-			},
-		});
+			})
+		);
+
+		this.registerEvent(
+			this.app.workspace.on("file-open", (f) => {
+				if (f !== null) {
+					this.render("file-open", f);
+				}
+			})
+		);
+
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf: WorkspaceLeaf) => {
+				const typ = leaf.getViewState().type;
+
+				switch (typ) {
+					case "file-explorer":
+						this.clear(`focus-${typ}`);
+						break;
+					case "markdown":
+						const f = this.app.workspace.getActiveFile();
+						if (f !== null) {
+							this.render("focus", f);
+						}
+						break;
+					case "empty":
+						this.clear("empty");
+						break;
+					default:
+						this.log(`Unknown leaf change event`, typ);
+				}
+			})
+		);
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, "click", (evt: MouseEvent) => {
-			console.log("click", evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(
-			window.setInterval(() => console.log("setInterval"), 5 * 60 * 1000)
-		);
+		this.addSettingTab(new PlusSettingTab(this.app, this));
 	}
 
-	onunload() {}
+	onunload() {
+		this.log("Good bye, onunload");
+		this.clear("unload");
+	}
+
+	render(event: string, f: TFile) {
+		// TODO: Debounce this.
+		// TODO: Handle TFolder
+		// TODO: Handle injection attacks
+
+		this.log(`Render event:'${event}'`, f);
+
+		let ctime = moment(f.stat.ctime).fromNow();
+		let mtime = moment(f.stat.mtime).fromNow();
+
+		// Set icon only once. The icon gets appended, pushing it to be on the right side.
+		if (!this.elem.hasChildNodes()) {
+			setIcon(this.elem, "file-clock");
+		}
+
+		let container = this.elem.find("div") || this.elem.createDiv({ cls: "what" });
+
+		const html = `
+			<div>
+				<span class="status-bar-item"> Created ${ctime}  </span>
+				<span class="status-bar-item"> Modified ${mtime} </span>
+			</div>
+		`;
+
+		container.innerHTML = html;
+	}
+
+	// Clear the status bar element with a log
+	clear(event: string) {
+		this.log(`[Status Plus] Clear event:'${event}'`);
+		this.elem.empty();
+	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData()
-		);
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
-}
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+	log(..._: any) {
+		// 1. Convert args to a normal array
+		var args = Array.prototype.slice.call(arguments);
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText("Woah!");
-	}
+		// 2. Prepend log prefix log string
+		args.unshift("[Status Plus] ");
 
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
+		// 3. Pass along arguments to console.log
+		if (this.settings.debug) {
+			console.log.apply(console, args);
+		}
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+class PlusSettingTab extends PluginSettingTab {
+	plugin: StatusPlus;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: StatusPlus) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -137,21 +155,33 @@ class SampleSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 
 		containerEl.empty();
-
-		containerEl.createEl("h2", { text: "Settings for my awesome plugin." });
+		containerEl.createEl("h2", { text: "Settings for Status Plus" });
 
 		new Setting(containerEl)
-			.setName("Setting #1")
-			.setDesc("It's a secret")
-			.addText((text) =>
-				text
-					.setPlaceholder("Enter your secret")
-					.setValue(this.plugin.settings.mySetting)
-					.onChange(async (value) => {
-						console.log("Secret: " + value);
-						this.plugin.settings.mySetting = value;
-						await this.plugin.saveSettings();
-					})
+			.setName("Enable ctime")
+			.setDesc("Show created time")
+			.addToggle((checked) =>
+				checked.setValue(this.plugin.settings.ctime).onChange(async (value) => {
+					this.plugin.settings.ctime = value;
+					await this.plugin.saveSettings();
+				})
 			);
+
+		new Setting(containerEl)
+			.setName("Enable mtime")
+			.setDesc("Show modified time")
+			.addToggle((checked) =>
+				checked.setValue(this.plugin.settings.mtime).onChange(async (value) => {
+					this.plugin.settings.mtime = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl).setName("Enable debug logs").addToggle((checked) =>
+			checked.setValue(this.plugin.settings.debug).onChange(async (value) => {
+				this.plugin.settings.debug = value;
+				await this.plugin.saveSettings();
+			})
+		);
 	}
 }
